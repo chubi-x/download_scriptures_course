@@ -1,2 +1,4 @@
 bs4
-request
+requests
+aiohttp
+html5lib
