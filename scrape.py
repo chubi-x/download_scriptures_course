@@ -1,15 +1,26 @@
+from functools import wraps
 import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import requests
 from urllib.parse import unquote
 import os
 import aiohttp
-from aiohttp.http_exceptions import TransferEncodingError
 import asyncio
 import certifi
 import ssl
 from bs4 import BeautifulSoup
 import logging
+
+
+HOME_DIR = os.path.dirname(__file__)
+sslcontext = ssl.create_default_context(cafile=certifi.where())
+
+
+URL = "https://orthodoxbiblestudy.info"
+
+headers = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.97 Safari/537.36"
+}
 
 
 def configure_logging():
@@ -27,17 +38,29 @@ def configure_logging():
 LOGGER = configure_logging()
 LOGGER.addHandler(logging.StreamHandler())
 
-sslcontext = ssl.create_default_context(cafile=certifi.where())
 
-HOME_DIR = os.path.dirname(__file__)
+def retry(max_attempts=5, delay=5):
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            attempts = 0
+            while attempts <= max_attempts:
+                try:
+                    return await func(*args, **kwargs)
+                except aiohttp.client_exceptions.ServerDisconnectedError:
+                    attempts += 1
+                    if attempts == max_attempts:
+                        raise
+                    LOGGER.error(
+                        f"Server disconnected. retrying after {delay} seconds. Attempt {attempts}/{max_attempts}."
+                    )
+                    await asyncio.sleep(delay)
+                except Exception as e:
+                    LOGGER.error(f"An unexpected error occured: {str(e)}")
 
-os.makedirs(f"{HOME_DIR}/podcasts", exist_ok=True)
+        return wrapper
 
-URL = "https://orthodoxbiblestudy.info"
-
-headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.97 Safari/537.36"
-}
+    return decorator
 
 
 def save_to_file(content, header, name):
@@ -46,6 +69,7 @@ def save_to_file(content, header, name):
         LOGGER.info("Finished!")
 
 
+@retry()
 async def download_video(s, link, name, header):
     if not os.path.isfile(f"{HOME_DIR}/podcasts/{header}/{name}.mp3"):
         try:
@@ -108,17 +132,20 @@ def extract_links(sections):
 
 async def main():
     tasks = []
+    os.makedirs(f"{HOME_DIR}/podcasts", exist_ok=True)
+
     r = requests.get(URL, headers=headers)
     home_soup = BeautifulSoup(r.content, features="html5lib")
     sections = home_soup.find("div", id="sidebar").find_all("div", recursive=False)
     podcasts = extract_links(sections)
 
-    async with aiohttp.ClientSession() as s:
+    async with aiohttp.ClientSession(trust_env=True) as s:
         for name, header, link in podcasts:
             # await download_video(s, link, name, header)
             tasks.append(asyncio.ensure_future(download_video(s, link, name, header)))
 
         await asyncio.gather(*tasks)
+
     LOGGER.info(
         "Finished downloading! Successful downloads: ",
         # len(successful_downloads),
