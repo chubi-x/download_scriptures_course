@@ -1,4 +1,5 @@
 from functools import wraps
+import traceback
 import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import requests
@@ -50,7 +51,7 @@ def retry(max_attempts=5, delay=5):
                 except aiohttp.client_exceptions.ServerDisconnectedError:
                     attempts += 1
                     if attempts == max_attempts:
-                        raise
+                        raise Exception
                     LOGGER.error(
                         f"Server disconnected. retrying after {delay} seconds. Attempt {attempts}/{max_attempts}."
                     )
@@ -75,18 +76,15 @@ async def download_video(s, link, name, header):
         try:
             async with s.get(link, headers=headers, ssl=sslcontext) as r:
                 content = await r.content.read()
-                soup = BeautifulSoup(content, features="html.parser")
-                story_content = soup.find("div", class_="storycontent")
-                # link = story_content.find("ul").find_next_sibling().find("a").get("href")
-                link = unquote(
-                    story_content.find("audio", class_="wp-audio-player")
-                    .find_previous("p")
-                    .find("a")
-                    .get("href")
-                ).replace(" ", "")
+                story_content = BeautifulSoup(content, features="html.parser").find(
+                    "div", class_="storycontent"
+                )
+                download_link = story_content.find(
+                    "audio", class_="wp-audio-player"
+                ).get("src")
 
                 async with s.get(
-                    link, headers=headers, allow_redirects=True, ssl=sslcontext
+                    download_link, headers=headers, allow_redirects=True, ssl=sslcontext
                 ) as res:
                     content = await res.read()
                     if res.headers["Content-Type"] == "audio/mpeg":
@@ -100,13 +98,15 @@ async def download_video(s, link, name, header):
                         )
         except AttributeError as e:
             LOGGER.error(f"Error parsing html for {name} under {header}:" f"{e}")
+            LOGGER.error(traceback.format_exc())
         except aiohttp.client_exceptions.InvalidUrlClientError as e:
             LOGGER.error(
-                f"Error fetching download {name} link:{link} " f"See error: {e}"
+                f"Invalid Url Error fetching download {name} link:{link} "
+                f"See error: {e}"
             )
         except aiohttp.client_exceptions.ClientPayloadError as e:
             LOGGER.error(
-                f"Error fetching download {name} link:{link} " f"See error: {e}"
+                f"Payload Error fetching download {name} link:{link} " f"See error: {e}"
             )
 
 
@@ -122,11 +122,10 @@ def extract_links(sections):
                 cell = row.select("td")[-1]
                 anchor = cell.find("a")
                 name = anchor.text.replace("\n", "")
-                link = anchor.get("href")
+                link = anchor.get("href").replace(" ", "")
                 podcasts.append((name, header, link))
         except Exception as e:
-            print(e)
-            # logging.info("Unable to parse: ", e.__str__())
+            LOGGER.error(f"Error scraping link: {str(e)}")
     return podcasts
 
 
@@ -141,24 +140,11 @@ async def main():
 
     async with aiohttp.ClientSession(trust_env=True) as s:
         for name, header, link in podcasts:
-            # await download_video(s, link, name, header)
             tasks.append(asyncio.ensure_future(download_video(s, link, name, header)))
 
         await asyncio.gather(*tasks)
 
-    LOGGER.info(
-        "Finished downloading! Successful downloads: ",
-        # len(successful_downloads),
-        "Unsuccessful Downloads: ",
-        # len(unsuccessful_downloads),
-    )
+    LOGGER.info("Finished downloading! ")
 
 
 asyncio.run(main())
-# THREAD_POOL.shutdown(wait=True)
-# count = 0
-# for section in sections:
-#     for link in links:
-#         if section == link["header"]:
-#             count += 1
-# print(count)
