@@ -3,7 +3,6 @@ import traceback
 import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import requests
-from urllib.parse import unquote
 import os
 import aiohttp
 import asyncio
@@ -104,10 +103,13 @@ async def download_video(s, link, name, header):
                 f"Invalid Url Error fetching download {name} link:{link} "
                 f"See error: {e}"
             )
+            LOGGER.error(traceback.format_exc())
+
         except aiohttp.client_exceptions.ClientPayloadError as e:
             LOGGER.error(
                 f"Payload Error fetching download {name} link:{link} " f"See error: {e}"
             )
+            LOGGER.error(traceback.format_exc())
 
 
 def extract_links(sections):
